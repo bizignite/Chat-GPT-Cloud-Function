@@ -1,22 +1,10 @@
 // Import necessary modules
-const functions = require("firebase-functions");
-const {SecretManagerServiceClient} = require("@google-cloud/secret-manager");
-const axios = require("axios");
+import OpenAI from "openai";
+const openai = new OpenAI();
 
 // Define the Cloud Function
 exports.kolaGpt = functions.https.onRequest(async (req, res) => {
   try {
-    // Create a new Secret Manager client
-    const client = new SecretManagerServiceClient();
-
-    // Retrieve the OpenAI key and assistant ID from Secret Manager
-    const [openaiKey] = await client.accessSecretVersion({
-      name: "projects/tiao-gpt/secrets/openAiKeyKola/versions/latest",
-    });
-    const [assistantId] = await client.accessSecretVersion({
-      name: "projects/tiao-gpt/secrets/assistantKola/versions/latest",
-    });
-
     // Extract the thread ID and user message from the request body
     const threadId = req.body.threadId;
     const userMessage = req.body.userMessage;
@@ -24,79 +12,29 @@ exports.kolaGpt = functions.https.onRequest(async (req, res) => {
     let thread;
     // If there's no thread ID, create a new thread
     if (!threadId) {
-      try {
-        thread = await axios.post("https://api.openai.com/v1/threads", {}, {
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${
-              openaiKey.payload.data.toString("utf8")}`,
-            "OpenAI-Beta": "assistants=v1",
-          },
-        });
-      } catch (error) {
-        console.error(`Error in thread creation: ${
-          error.response.status}
-          ${error.response.statusText}`);
-        throw error;
-      }
+      thread = await openai.beta.threads.create();
     } else {
       // If there's a thread ID, use it
       thread = {data: {id: threadId}};
     }
 
     // Post the user's message to the thread
-    try {
-      await axios.post(`https://api.openai.com/v1/threads/${thread.data.id}/messages`, {
-        role: "user",
-        content: userMessage,
-      }, {
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${openaiKey.payload.data.toString("utf8")}`,
-          "OpenAI-Beta": "assistants=v1",
-        },
-      });
-    } catch (error) {
-      console.error("Error in message posting:", error);
-      throw error;
-    }
+    await openai.beta.threads.messages.create(thread.data.id, {
+      role: "user",
+      content: userMessage,
+    });
 
     // Create a new run with the assistant
-    let run;
-    try {
-      run = await axios.post(`https://api.openai.com/v1/threads/${thread.data.id}/runs`, {
-        assistant_id: assistantId.payload.data.toString("utf8"),
-      }, {
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${openaiKey.payload.data.toString("utf8")}`,
-          "OpenAI-Beta": "assistants=v1",
-        },
-      });
-    } catch (error) {
-      console.error("Error in run creation:", error);
-      throw error;
-    }
+    let run = await openai.beta.threads.runs.create(thread.data.id, {
+      assistant_id: "asst_abc123",
+    });
 
     // Retrieve the run until it's completed
     let retrieveRun;
     let retries = 0;
     const maxRetries = 1000; // Maximum number of retries
     do {
-      try {
-        retrieveRun = await axios.get(`https://api.openai.com/v1/threads/${
-          thread.data.id}/runs/${
-          run.data.id}`, {
-          headers: {
-            "Authorization": `Bearer ${
-              openaiKey.payload.data.toString("utf8")}`,
-            "OpenAI-Beta": "assistants=v1",
-          },
-        });
-      } catch (error) {
-        console.error("Error in run retrieval:", error);
-        throw error;
-      }
+      retrieveRun = await openai.beta.threads.runs.retrieve(thread.data.id, run.data.id);
       retries++;
     } while (retrieveRun.data.status !== "completed" && retries < maxRetries);
 
@@ -106,19 +44,7 @@ exports.kolaGpt = functions.https.onRequest(async (req, res) => {
     }
 
     // Retrieve the AI's reply
-    let aiReply;
-    try {
-      aiReply = await axios.get(`https://api.openai.com/v1/threads/${thread.data.id}/messages`, {
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${openaiKey.payload.data.toString("utf8")}`,
-          "OpenAI-Beta": "assistants=v1",
-        },
-      });
-    } catch (error) {
-      console.error("Error in reply retrieval:", error);
-      throw error;
-    }
+    let aiReply = await openai.beta.threads.messages.list(thread.data.id);
 
     // Send the AI's reply as the response
     res.status(200).send(aiReply.data);
